@@ -18,7 +18,18 @@ get_raster_eigen_treelocs(
   cylinder_fit_type = "ransac",
   output_location = getwd(),
   max_dia = 0.5,
-  SDvert = 0.25
+  SDvert = 0.25,
+  select_n = 20,
+  p = 0.9,
+  P = 0.99,
+  timesN = 5,
+  init = NULL,
+  opt.method = "Nelder-Mead",
+  max.iter = 10,
+  rmse.threshold = 0.001,
+  per.allowable.error = 50,
+  cores = detectCores(logical = F),
+  m.estimator = "tukey"
 )
 }
 \arguments{
@@ -38,11 +49,33 @@ get_raster_eigen_treelocs(
 
 \item{minimum_polygon_area}{numeric Smallest allowable polygon area of potential tree boles.}
 
-\item{cylinder_fit_type}{character Choose "ransac" or "irls" cylinder fitting.}
+\item{cylinder_fit_type}{character Choose "ransac" or "leastsq" cylinder fitting.}
 
 \item{output_location}{character Where to write intermediary and output data layers.}
 
-\item{SDvert}{numeric The standard deviation threshold below whihc polygons will be considered as tree boles}
+\item{SDvert}{numeric The standard deviation threshold below which polygons will be considered as tree boles.}
+
+\item{select_n}{numeric Number of points used in each iteration of cylinder fitting.}
+
+\item{p}{numeric Proportion of inliers in P.}
+
+\item{P}{numeric Level of confidence desired.}
+
+\item{timesN}{numeric Number of times to run RANSAC cylinder fitting.}
+
+\item{init}{numeric Initial values for cylinder fitting.}
+
+\item{opt.method}{character Optimization method for cylinder fitting.}
+
+\item{max.iter}{numeric Maximum number of iterations for cylinder fitting.}
+
+\item{rmse.threshold}{numeric Root mean square error threshold for cylinder fitting.}
+
+\item{per.allowable.error}{numeric Percent allowable error for cylinder fitting.}
+
+\item{cores}{numeric Number of cores to use in cylinder fitting.}
+
+\item{m.estimator}{character M-estimator to use in cylinder fitting.}
 
 \item{neigh_size}{numeric Vector for verticality and relative density (small and large neighborhoods) calculations}
 
@@ -60,7 +93,7 @@ and \code{Error} in the same units as the .las
 For terrestrial and mobile lidar datasets, tree locations and estimates of DBH are provided
 by rasterizing individual point cloud values of relative neighborhood density (at 0.3 and
 1 m radius) and verticality within a slice of the normalized point cloud around breast height
-(1.34 m). The algorithim then uses defined threshold values to classify the resulting rasters
+(1.34 m). The algorithm then uses defined threshold values to classify the resulting rasters
 and create unique polygons from the resulting classified raster. These point-density and
 verticality polygons were selected by their intersection with one another, resulting in a
 final set of polygons which were used to clip out regions of the point cloud that were most
@@ -76,23 +109,21 @@ to an individual tree segmentation
 set_lidr_threads(8)
 
 # read the las (which must be downloaded with getExampleData())
-LASfile <- system.file("extdata", "Pine_Example.laz", package="spanner")
+LASfile = system.file("extdata", "MLSSparseCloud - xyzOnly.laz", package="spanner")
 las = readLAS(LASfile, select = "xyzc")
 
 # plot(las, color="Z", backend="lidRviewer", trim=30)
 
 # find tree locations and attribute data
-myTreeLocs = get_raster_eigen_treelocs(las = las, res = 0.05, pt_spacing = 0.0254,
-                                       dens_threshold = 0.25,
-                                       neigh_sizes = c(0.333, 0.166, 0.5),
-                                       eigen_threshold = 0.5,
-                                       grid_slice_min = 0.666,
-                                       grid_slice_max = 2,
-                                       minimum_polygon_area = 0.01,
-                                       cylinder_fit_type = "ransac",
-                                       output_location = getwd(),
-                                       max_dia = 1,
-                                       SDvert = 0.25)
+myTreeLocs = get_raster_eigen_treelocs(las = las, res = 0.05, pt_spacing = 0.0254, dens_threshold = 0.2,
+     neigh_sizes=c(0.333, 0.166, 0.5), eigen_threshold = 0.6666,
+     grid_slice_min = 0.6666, grid_slice_max = 2.0,
+     minimum_polygon_area = 0.025, cylinder_fit_type = "leastsq",
+     output_location = getwd(), max_dia=0.5, SDvert = 0.25, select_n=20,
+     p=.9, P=.99, timesN = 5, init = NULL, opt.method = 'Nelder-Mead',
+     max.iter = 10, rmse.threshold = 0.001, per.allowable.error = 50,
+     cores = detectCores(logical = F), m.estimator = 'tukey')
+
 }
 
 }

@@ -53,7 +53,7 @@ points in the input dense point cloud.}
 interest for processing}
 }
 \value{
-a .las with the column treeID added.
+a sparse/dense normalized .las with the column treeID added.
 }
 \description{
 \code{segment_graph} returns a .las object with a new column "treeID".

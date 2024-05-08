@@ -7,7 +7,7 @@
 #' For terrestrial and mobile lidar datasets, tree locations and estimates of DBH are provided
 #' by rasterizing individual point cloud values of relative neighborhood density (at 0.3 and
 #' 1 m radius) and verticality within a slice of the normalized point cloud around breast height
-#' (1.34 m). The algorithim then uses defined threshold values to classify the resulting rasters
+#' (1.34 m). The algorithm then uses defined threshold values to classify the resulting rasters
 #' and create unique polygons from the resulting classified raster. These point-density and
 #' verticality polygons were selected by their intersection with one another, resulting in a
 #' final set of polygons which were used to clip out regions of the point cloud that were most
@@ -24,12 +24,21 @@
 #' @param grid_slice_min numeric Lower bound of point cloud slice in normalized point cloud.
 #' @param grid_slice_max numeric Upper bound of point cloud slice in normalized point cloud.
 #' @param minimum_polygon_area numeric Smallest allowable polygon area of potential tree boles.
-#' @param cylinder_fit_type  character Choose "ransac" or "irls" cylinder fitting.
+#' @param cylinder_fit_type  character Choose "ransac" or "leastsq" cylinder fitting.
 #' @param output_location character Where to write intermediary and output data layers.
 #' @param max_dai numeric The max diameter (in m) of a resulting tree (use to eliminate commission errors).
-#' @param SDvert numeric The standard deviation threshold below whihc polygons will be considered as tree boles.
-#' #' @param n_best integeter number of "best" ransac fits to keep when evaluating the best fit.
-#' @param n_pts integer number of point to be selected per ransac iteraiton for fitting.
+#' @param SDvert numeric The standard deviation threshold below which polygons will be considered as tree boles.
+#' @param select_n numeric Number of points used in each iteration of cylinder fitting.
+#' @param p numeric Proportion of inliers in P.
+#' @param P numeric Level of confidence desired.
+#' @param timesN numeric Number of times to run RANSAC cylinder fitting.
+#' @param init numeric Initial values for cylinder fitting.
+#' @param opt.method character Optimization method for cylinder fitting.
+#' @param max.iter numeric Maximum number of iterations for cylinder fitting.
+#' @param rmse.threshold numeric Root mean square error threshold for cylinder fitting.
+#' @param per.allowable.error numeric Percent allowable error for cylinder fitting.
+#' @param cores numeric Number of cores to use in cylinder fitting.
+#' @param m.estimator character M-estimator to use in cylinder fitting.
 #'
 #' @return data.frame A data.frame containing the following seed information: `TreeID`,
 #' `X`, `Y`, `Z`, and `Radius` in the same units as the .las
@@ -42,25 +51,21 @@
 #' set_lidr_threads(8)
 #'
 #' # read the las (which must be downloaded with getExampleData())
-#' LASfile <- system.file("extdata", "Pine_Example.laz", package="spanner")
+#' LASfile = system.file("extdata", "MLSSparseCloud - xyzOnly.laz", package="spanner")
 #' las = readLAS(LASfile, select = "xyzc")
 #'
 #' # plot(las, color="Z", backend="lidRviewer", trim=30)
 #'
 #' # find tree locations and attribute data
-#' myTreeLocs = get_raster_eigen_treelocs(las = las, res = 0.05, pt_spacing = 0.0254,
-#'                                        dens_threshold = 0.25,
-#'                                        neigh_sizes = c(0.333, 0.166, 0.5),
-#'                                        eigen_threshold = 0.5,
-#'                                        grid_slice_min = 0.666,
-#'                                        grid_slice_max = 2,
-#'                                        minimum_polygon_area = 0.01,
-#'                                        cylinder_fit_type = "ransac",
-#'                                        output_location = getwd(),
-#'                                        max_dia = 1,
-#'                                        SDvert = 0.25,
-#'                                        n_pts = 20,
-#'                                        n_best = 25)
+#' myTreeLocs = get_raster_eigen_treelocs(las = las, res = 0.05, pt_spacing = 0.0254, dens_threshold = 0.2,
+#'      neigh_sizes=c(0.333, 0.166, 0.5), eigen_threshold = 0.6666,
+#'      grid_slice_min = 0.6666, grid_slice_max = 2.0,
+#'      minimum_polygon_area = 0.025, cylinder_fit_type = "leastsq",
+#'      output_location = getwd(), max_dia=0.5, SDvert = 0.25, select_n=20,
+#'      p=.9, P=.99, timesN = 5, init = NULL, opt.method = 'Nelder-Mead',
+#'      max.iter = 10, rmse.threshold = 0.001, per.allowable.error = 50,
+#'      cores = detectCores(logical = F), m.estimator = 'tukey')
+#'
 # plot(lidR::grid_canopy(las, res = 0.2, p2r()))
 # points(myTreeLocs$X, myTreeLocs$Y, col = "black", pch=16, cex = myTreeLocs$Radius^2*10)
 #' }
@@ -70,7 +75,10 @@ get_raster_eigen_treelocs <- function(las = las, res = 0.05, pt_spacing = 0.0254
                                       neigh_sizes=c(0.333, 0.166, 0.5), eigen_threshold = 0.6666,
                                       grid_slice_min = 0.6666, grid_slice_max = 2.0,
                                       minimum_polygon_area = 0.025, cylinder_fit_type = "ransac",
-                                      output_location = getwd(), max_dia=0.5, SDvert = 0.25, n_best=25, n_pts=20)
+                                      output_location = getwd(), max_dia=0.5, SDvert = 0.25, select_n=20, p=.9,
+                                      P=.99, timesN = 5, init = NULL, opt.method = 'Nelder-Mead',
+                                      max.iter = 10, rmse.threshold = 0.001, per.allowable.error = 50,
+                                      cores = detectCores(logical = F), m.estimator = 'tukey')
 {
 
   ## Validate output directory
@@ -101,23 +109,23 @@ get_raster_eigen_treelocs <- function(las = las, res = 0.05, pt_spacing = 0.0254
 
   message("Calculating relative density... (5/14)\n")
   cnt_local <- spanner:::C_count_in_disc(X = slice_extra@data$X, Y = slice_extra@data$Y,
-                                      x = slice_extra@data$X, y = slice_extra@data$Y,
-                                      radius = neigh_sizes[2], ncpu = lidR::get_lidr_threads())
+                                         x = slice_extra@data$X, y = slice_extra@data$Y,
+                                         radius = neigh_sizes[2], ncpu = lidR::get_lidr_threads())
   cnt_large <- spanner:::C_count_in_disc(X = slice_extra@data$X, Y = slice_extra@data$Y,
-                                      x = slice_extra@data$X, y = slice_extra@data$Y,
-                                      radius = neigh_sizes[3], ncpu = lidR::get_lidr_threads())
+                                         x = slice_extra@data$X, y = slice_extra@data$Y,
+                                         radius = neigh_sizes[3], ncpu = lidR::get_lidr_threads())
   slice_extra <- lidR::add_lasattribute(slice_extra, as.numeric(cnt_local/cnt_large),
                                         name = "relative_density", desc = "relative density")
 
   ##---------------------- Eigen & Raster Processing -------------------------------------
   message("Gridding relative density... (6/14)\n")
   filename = paste0(output_location, paste0("temp_RelDens_",grid_slice_min,"-",grid_slice_max,"_",
-                                                                 dens_threshold,"threshold_res-",res,".shp"))
+                                            dens_threshold,"threshold_res-",res,".shp"))
 
   density_grid <- terra::rast(lidR::grid_metrics(slice_extra, ~stats::median(relative_density, na.rm = T), res = res,
                                                  start = c(min(slice_extra@data$X), min(slice_extra@data$Y))))
   density_polygon <- terra::as.polygons(terra::classify(density_grid, rbind(c(0,dens_threshold,0),
-                                                              c(dens_threshold,1,1))), dissolve = T)
+                                                                            c(dens_threshold,1,1))), dissolve = T)
   terra::writeVector(terra::disagg(density_polygon[density_polygon$V1 > 0,]), filename = filename, overwrite=TRUE)
 
   suppressMessages(sf::sf_use_s2(FALSE)) ## Turn off the s2 processing
@@ -131,11 +139,11 @@ get_raster_eigen_treelocs <- function(las = las, res = 0.05, pt_spacing = 0.0254
 
   message("Gridding verticality... (7/14)\n")
   filename = paste0(output_location, paste0("temp_vertical_",grid_slice_min,"-",grid_slice_max,"_",
-                                                                 eigen_threshold,"threshold_res-",res,".shp"))
+                                            eigen_threshold,"threshold_res-",res,".shp"))
 
   verticality_grid <- terra::rast(lidR::grid_metrics(slice_extra, ~stats::quantile(verticality, 0.5, na.rm = T), res = res))
   verticality_polygon <- terra::as.polygons(terra::classify(verticality_grid, rbind(c(0,eigen_threshold,0),
-                                                                      c(eigen_threshold,1,1))), dissolve = T)
+                                                                                    c(eigen_threshold,1,1))), dissolve = T)
   terra::writeVector(terra::disagg(verticality_polygon[verticality_polygon$V1 > 0,]), filename = filename, overwrite=TRUE)
 
   verticality_polygon <- sf::read_sf(filename)
@@ -170,7 +178,7 @@ get_raster_eigen_treelocs <- function(las = las, res = 0.05, pt_spacing = 0.0254
   merged$diffHGT <- round(merged$highHGT - merged$lowHGT,2)
   # merged <- merged[merged$diffHGT > ((grid_slice_max - grid_slice_min) / 2), ]
   merged$maxHGT <- round(terra::extract(terra::rast(cancov), terra::vect(sf::as_Spatial(merged)),
-                                        fun = max)[,2], 2)
+                                        fun = function(x){max(x)})[,2], 2)
 
   merged <- merged[merged$SDvert < SDvert, ]
   merged <- merged[merged$diffHGT > (grid_slice_max-grid_slice_min)*0.5, ]
@@ -186,8 +194,8 @@ get_raster_eigen_treelocs <- function(las = las, res = 0.05, pt_spacing = 0.0254
   coords <- data.frame(sf::st_coordinates(na.omit(merged)))
   circles <- list()
   for(id in unique(coords$L2)){
-    circles[[id]] <- data.frame(conicfit::CircleFitByLandau(coords[coords$L2 == id, c("X","Y")]))
-    names(circles[[id]]) <- c("X","Y","R")
+    circles[[id]] <- fit_circle(as.matrix(coords[coords$L2 == id, c("X","Y")]), method = cylinder_fit_type, n=select_n, p=p, P=P, c0=T)
+    names(circles[[id]]) <- c("X","Y","R","rsme")
   }
   circles <- dplyr::bind_rows((circles))
   circles_sf <- sf::st_sf(sf::st_buffer(sf::st_cast(sf::st_sfc(sf::st_multipoint(as.matrix(circles)[,1:2])),
@@ -197,31 +205,28 @@ get_raster_eigen_treelocs <- function(las = las, res = 0.05, pt_spacing = 0.0254
   circles_sf <- sf::st_buffer(circles_sf, 0.075)
   sf::st_crs(circles_sf) = sf::st_crs(slice_extra)
   slice_clip <- lidR::merge_spatial(las = lidR::clip_roi(slice_extra, sf::st_sf(sf::st_union(circles_sf))),
-                              source = circles_sf, attribute = "TreeID")
+                                    source = circles_sf, attribute = "TreeID")
 
   slice_clip <- lidR::filter_poi(slice_clip, verticality >= 0.5)
   if(is.null(slice_clip)) stop("No points in the las object after processing the resulting clipped slice! Try adjusting the threshold values.", call. = FALSE)
 
-   ##---------------------- Identify Trees -------------------------------------
+  ##---------------------- Identify Trees -------------------------------------
   message("Fitting nested height (length) cylinders...(12/14)\n")
   cyl_fit <- list()
   for(t in 1:length(sort(unique(slice_clip$TreeID))))
-    {
+  {
     min = grid_slice_min; max = grid_slice_max
     if(cylinder_fit_type == "ransac"){
-      n_pts = n_pts
-      n_best = n_best
-    } else if(cylinder_fit_type == "irls"){
-      n_pts = min(data.frame(lidR::filter_poi(slice_clip, Z <= max, Z >= min)@data %>%
-                               dplyr::group_by(TreeID) %>%
-                               dplyr::summarize(count = length(X)))$count)/2
-      n_best = 100
+      fit <- fit_cylinder(as.matrix(lidR::filter_poi(slice_clip, TreeID == sort(unique(slice_clip$TreeID))[t])@data[, c("X", "Y", "Z")]),
+                          method = "ransac", select_n=select_n, p=p, P=P, timesN = timesN, init = init, opt.method = opt.method, rmse.threshold = rmse.threshold,
+                          per.allowable.error = per.allowable.error, cores = cores)
+    } else if(cylinder_fit_type == "leastsq"){
+      fit <- fit_cylinder(as.matrix(lidR::filter_poi(slice_clip, TreeID == sort(unique(slice_clip$TreeID))[t])@data[, c("X", "Y", "Z")]),
+                          method = "leastsq", init = NULL, select_n=select_n, max.iter = max.iter, opt.method = opt.method,
+                          rmse.threshold = rmse.threshold, per.allowable.error = per.allowable.error)
     } else {
-      stop("You will need to choose either 'ransac' or 'irls' cylinder fitting method...", call. = FALSE)
+      stop("Invalid method. Choose either 'ransac' or 'leastsq'.", call. = FALSE)
     }
-    fit <- spanner:::cylinderFit(lidR::filter_poi(slice_clip, TreeID == sort(unique(slice_clip$TreeID))[t]),
-                                method = cylinder_fit_type, n = n_pts, inliers = 0.9,
-                                conf = 0.99, max_angle = 20, n_best = n_best)
     fit$TreeID <- sort(unique(slice_clip$TreeID))[t]
     fit$dbh_width <- max-min
 
@@ -229,20 +234,16 @@ get_raster_eigen_treelocs <- function(las = las, res = 0.05, pt_spacing = 0.0254
 
     min = 1.1 - ((1.1 - grid_slice_min)/2); max =  1.6 + ((grid_slice_max - 1.6)/2)
     if(cylinder_fit_type == "ransac"){
-      n_pts = n_pts
-      n_best = n_best
-    } else if(cylinder_fit_type == "irls"){
-      n_pts = min(data.frame(lidR::filter_poi(slice_clip, Z <= max, Z >= min)@data %>%
-                               dplyr::group_by(TreeID) %>%
-                               dplyr::summarize(count = length(X)))$count)/2
-      n_best = 100
+      fit <- fit_cylinder(as.matrix(lidR::filter_poi(slice_clip, TreeID == sort(unique(slice_clip$TreeID))[t], Z >= min, Z <= max)@data[, c("X", "Y", "Z")]),
+                          method = "ransac", select_n=select_n, p=p, P=P, timesN = timesN, init = init, opt.method = opt.method, rmse.threshold = rmse.threshold,
+                          per.allowable.error = per.allowable.error, cores = cores)
+    } else if(cylinder_fit_type == "leastsq"){
+      fit <- fit_cylinder(as.matrix(lidR::filter_poi(slice_clip, TreeID == sort(unique(slice_clip$TreeID))[t], Z >= min, Z <= max)@data[, c("X", "Y", "Z")]),
+                          method = "leastsq", init = NULL, select_n=select_n, max.iter = max.iter, opt.method = opt.method,
+                          rmse.threshold = rmse.threshold, per.allowable.error = per.allowable.error)
     } else {
-      stop("You will need to choose either 'ransac' or 'irls' cylinder fitting method...", call. = FALSE)
+      stop("Invalid method. Choose either 'ransac' or 'leastsq'.", call. = FALSE)
     }
-    fit <- spanner:::cylinderFit(lidR::filter_poi(slice_clip, TreeID == sort(unique(slice_clip$TreeID))[t],
-                                           Z >= min, Z <= max),
-                                method = cylinder_fit_type, n = n_pts, inliers = 0.9,
-                                conf = 0.99, max_angle = 20, n_best = n_best)
     fit$TreeID <- sort(unique(slice_clip$TreeID))[t]
     fit$dbh_width <- max-min
 
@@ -250,20 +251,16 @@ get_raster_eigen_treelocs <- function(las = las, res = 0.05, pt_spacing = 0.0254
 
     min = 1.1; max = 1.6
     if(cylinder_fit_type == "ransac"){
-      n_pts = n_pts
-      n_best = n_best
-    } else if(cylinder_fit_type == "irls"){
-      n_pts = min(data.frame(lidR::filter_poi(slice_clip, Z <= max, Z >= min)@data %>%
-                               dplyr::group_by(TreeID) %>%
-                               dplyr::summarize(count = length(X)))$count)/2
-      n_best = 100
+      fit <- fit_cylinder(as.matrix(lidR::filter_poi(slice_clip, TreeID == sort(unique(slice_clip$TreeID))[t], Z >= min, Z <= max)@data[, c("X", "Y", "Z")]),
+                          method = "ransac", select_n=select_n, p=p, P=P, timesN = timesN, init = init, opt.method = opt.method, rmse.threshold = rmse.threshold,
+                          per.allowable.error = per.allowable.error, cores = cores)
+    } else if(cylinder_fit_type == "leastsq"){
+      fit <- fit_cylinder(as.matrix(lidR::filter_poi(slice_clip, TreeID == sort(unique(slice_clip$TreeID))[t], Z >= min, Z <= max)@data[, c("X", "Y", "Z")]),
+                          method = "leastsq", init = NULL, select_n=select_n, max.iter = max.iter, opt.method = opt.method,
+                          rmse.threshold = rmse.threshold, per.allowable.error = per.allowable.error)
     } else {
-      stop("You will need to choose either 'ransac' or 'irls' cylinder fitting method...", call. = FALSE)
+      stop("Invalid method. Choose either 'ransac' or 'leastsq'.", call. = FALSE)
     }
-    fit <- spanner:::cylinderFit(lidR::filter_poi(slice_clip, TreeID == sort(unique(slice_clip$TreeID))[t],
-                                           Z >= min, Z <= max),
-                                method = cylinder_fit_type, n = n_pts, inliers = 0.9,
-                                conf = 0.99, max_angle = 20, n_best = n_best)
     fit$TreeID <- sort(unique(slice_clip$TreeID))[t]
     fit$dbh_width <- max-min
 
@@ -278,7 +275,7 @@ get_raster_eigen_treelocs <- function(las = las, res = 0.05, pt_spacing = 0.0254
 
   ##---------------------- Cleaning up the Output -------------------------------------
   message("Successfully obtained the cylinder summaries... (13/14)\n")
-  output<-summary_cyl_fit[,c("TreeID","px","py","pz","radius","err")]
+  output<-summary_cyl_fit[,c("TreeID","px","py","pz","radius","rmse")]
   colnames(output)<-c("TreeID","X","Y","Z","Radius","Error")
   if(nrow(output) == 0 | is.null(output)) stop("No output data was created from the fitted cylinders! Try adjusting the threshold values.", call. = FALSE)
   return(output)

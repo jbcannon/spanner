@@ -3,7 +3,7 @@ Type: Package
 Title: Utilities to support landscape-, forest-, and tree-related data analysis
 Version: 1.0
 Date: 2021-01-17
-Authors@R: c(person("andrew", "Sanchez Meador", email = "Andrew.SanchezMeador@nau.edu", role = c("aut", "cre")),
+Authors@R: c(person("Andrew", "Sanchez Meador", email = "Andrew.SanchezMeador@nau.edu", role = c("aut", "cre")),
              person("Jonathon", "Donager", email = "Jonathon.Donager@gmail.com", role = c("aut", "ctb")))
 Description: Utilities to support landscape-, forest-, and tree-related data collection, manipulation, analysis, modelling, and visualization.
 URL: https://github.com/bi0m3trcis/spanner
@@ -28,7 +28,6 @@ Imports:
     dplyr,
     dbscan,
     stringr,
-    conicfit,
     FNN,
     RANN,
     cppRouting,

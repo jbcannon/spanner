@@ -33,9 +33,8 @@ library(spanner)
 # set the number of threads to use in lidR
 set_lidr_threads(8)
 
-# download and read an example laz
-getExampleData("DensePatchA")
-LASfile = system.file("extdata", "DensePatchA.laz", package="spanner")
+# Load an example laz
+LASfile = system.file("extdata", "MLSSparseCloud - xyzOnly.laz", package="spanner")
 las = readTLSLAS(LASfile, select = "xyzcr", "-filter_with_voxel 0.01")
 # Don't forget to make sure the las object has a projection
 # projection(las) = sp::CRS("+init=epsg:26912")
@@ -59,20 +58,15 @@ plot(filter_poi(las, Classification!=2), color="Z")
 las_check(las)
 
 # find individual tree locations and attribute data
-myTreeLocs = get_raster_eigen_treelocs(las = las, res = 0.05, 
-                                       pt_spacing = 0.0254, 
-                                       dens_threshold = 0.2, 
-                                       neigh_sizes = c(0.333, 0.166, 0.5), 
-                                       eigen_threshold = 0.5, 
-                                       grid_slice_min = 0.6666, 
-                                       grid_slice_max = 2.0,
-                                       minimum_polygon_area = 0.025, 
-                                       cylinder_fit_type = "ransac", 
-                                       output_location = getwd(), 
-                                       max_dia = 0.5, 
-                                       SDvert = 0.25,
-                                       n_pts = 20,
-                                       n_best = 25)
+myTreeLocs = get_raster_eigen_treelocs(las = las, res = 0.05, pt_spacing = 0.0254, dens_threshold = 0.2,
+                                       neigh_sizes=c(0.333, 0.166, 0.5), eigen_threshold = 0.6666,
+                                       grid_slice_min = 0.6666, grid_slice_max = 2.0,
+                                       minimum_polygon_area = 0.025, cylinder_fit_type = "leastsq",
+                                       output_location = getwd(), max_dia=0.5, SDvert = 0.25, n=20, p=.9,
+                                       P=.99, timesN = 5, init = NULL, opt.method = 'Nelder-Mead',
+                                       select_n=20, max.iter = 10, rmse.threshold = 0.001, 
+                                       per.allowable.error = 50, cores = detectCores(logical = F), 
+                                       m.estimator = 'tukey')
 
 # plot the tree information over a CHM
 plot(lidR::grid_canopy(las, res = 0.2, p2r()))
